@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from ogb.nodeproppred import Evaluator
 import pandas as pd
 
+
 class BaseTrainer(object):
     '''
     Basic trainer for training.
@@ -46,7 +47,7 @@ class BaseTrainer(object):
         for i in range(self.info_dict['n_epochs']):
             tr_loss_epoch, tr_acc, tr_microf1, tr_macrof1 = self.train_epoch(i)
             (val_loss_epoch, val_acc_epoch, val_microf1_epoch, val_macrof1_epoch), \
-            (tt_loss_epoch, tt_acc_epoch, tt_microf1_epoch, tt_macrof1_epoch) = self.eval_epoch(i)
+                (tt_loss_epoch, tt_acc_epoch, tt_microf1_epoch, tt_macrof1_epoch) = self.eval_epoch(i)
 
             if val_acc_epoch > self.best_val_acc:
                 self.best_val_acc = val_acc_epoch
@@ -116,7 +117,7 @@ class BaseTrainer(object):
             tt_epoch_macro_f1 = metrics.f1_score(tt_labels.cpu().numpy(), tt_preds.cpu().numpy(), average="macro")
 
         return (val_epoch_loss.cpu().item(), val_epoch_acc, val_epoch_micro_f1, val_epoch_macro_f1), \
-               (tt_epoch_loss.cpu().item(), tt_epoch_acc, tt_epoch_micro_f1, tt_epoch_macro_f1)
+            (tt_epoch_loss.cpu().item(), tt_epoch_acc, tt_epoch_micro_f1, tt_epoch_macro_f1)
 
     def save_model(self, model, info_dict, state='val'):
 
@@ -144,7 +145,11 @@ class ViolinTrainer(BaseTrainer):
         self.virt_edge_index = None  # virtual links indices
 
         self.best_pretr_val_acc = None
-        self.pretr_model_dir = os.path.join('exp', self.info_dict['backbone'] + '_ori', self.info_dict['dataset'], '{model}_{db}_{seed}_{state}.pt'.format(model=self.info_dict['backbone'], db=self.info_dict['dataset'], seed=self.info_dict['seed'], state='val',))
+        self.pretr_model_dir = os.path.join('exp', self.info_dict['backbone'] + '_ori', self.info_dict['dataset'],
+                                            '{model}_{db}_{seed}_{state}.pt'.format(model=self.info_dict['backbone'],
+                                                                                    db=self.info_dict['dataset'],
+                                                                                    seed=self.info_dict['seed'],
+                                                                                    state='val', ))
         self.load_pretr_model()
         self.pred_label_flag = True  # a flag to indicate whether it needs to predict labels for the next epoch
 
@@ -197,7 +202,7 @@ class ViolinTrainer(BaseTrainer):
                 # add virtual links for the unlabeled nodes
                 other_vl_k_idx = torch.arange(self.g.num_nodes)[k_mask]
                 other_vl_rand_idx = torch.from_numpy(np.random.choice(other_vl_k_idx, other_k_mask.sum().item(),
-                                                                    replace=True))
+                                                                      replace=True))
                 srcs[other_k_mask] = other_vl_rand_idx
 
             # qualified edges
@@ -231,7 +236,7 @@ class ViolinTrainer(BaseTrainer):
 
             tr_loss_epoch, tr_acc, tr_microf1, tr_macrof1 = self.train_epoch(i)
             (val_loss_epoch, val_acc_epoch, val_microf1_epoch, val_macrof1_epoch), \
-            (tt_loss_epoch, tt_acc_epoch, tt_microf1_epoch, tt_macrof1_epoch) = self.eval_epoch(i)
+                (tt_loss_epoch, tt_acc_epoch, tt_microf1_epoch, tt_macrof1_epoch) = self.eval_epoch(i)
 
             if val_acc_epoch > self.best_val_acc:
                 self.best_val_acc = val_acc_epoch
@@ -244,7 +249,8 @@ class ViolinTrainer(BaseTrainer):
                     # generate estimated labels in the following epochs
                     self.pretr_model_dir = save_model_dir
                     self.pred_label_flag = True
-                    print(f"epoch {i:03d} | new best validation accuracy {self.best_val_acc:.4f} - test accuracy {self.best_tt_acc:.4f}")
+                    print(
+                        f"epoch {i:03d} | new best validation accuracy {self.best_val_acc:.4f} - test accuracy {self.best_tt_acc:.4f}")
 
             if i % 50 == 0:
                 print(
@@ -294,7 +300,8 @@ class ViolinTrainer(BaseTrainer):
             else:
                 raise ValueError("Unexpected cls_mode parameter: {}".format(self.info_dict['cls_mode']))
 
-            epoch_loss = epoch_cls_loss + self.info_dict['alpha'] * epoch_con_loss + self.info_dict['gamma'] * epoch_vl_loss
+            epoch_loss = epoch_cls_loss + self.info_dict['alpha'] * epoch_con_loss + self.info_dict[
+                'gamma'] * epoch_vl_loss
 
             self.opt.zero_grad()
             epoch_loss.backward()
@@ -328,7 +335,7 @@ class ViolinTrainer(BaseTrainer):
             tt_epoch_macro_f1 = metrics.f1_score(tt_labels.cpu().numpy(), tt_preds.cpu().numpy(), average="macro")
 
         return (val_epoch_loss.cpu().item(), val_epoch_acc, val_epoch_micro_f1, val_epoch_macro_f1), \
-               (tt_epoch_loss.cpu().item(), tt_epoch_acc, tt_epoch_micro_f1, tt_epoch_macro_f1)
+            (tt_epoch_loss.cpu().item(), tt_epoch_acc, tt_epoch_micro_f1, tt_epoch_macro_f1)
 
     def get_pred_labels(self):
 
@@ -410,11 +417,11 @@ class ViolinTrainer(BaseTrainer):
 
 
 class GatingMLP(nn.Module):
-    def __init__(self, input_dim, cls_dim, hidden_dim=64):
+    def __init__(self, input_dim, hidden_dim=64):
         super(GatingMLP, self).__init__()
 
         # MLP layers to combine node features and confidence scores
-        self.fc1 = nn.Linear(input_dim + cls_dim, hidden_dim)  # +cls_dim for the confidence score
+        self.fc1 = nn.Linear(input_dim + 1, hidden_dim)  # +1 for the confidence score
         self.fc2 = nn.Linear(hidden_dim, 1)
         # Dropout layer for regularization
         self.dropout = nn.Dropout(p=0.5)
@@ -424,6 +431,10 @@ class GatingMLP(nn.Module):
         self.sigmoid = nn.Sigmoid()  # Ensures output between 0-1 for gating
 
     def forward(self, node_features, confidence_scores):
+        # Reshape confidence scores if needed
+        if confidence_scores.dim() == 1:
+            confidence_scores = confidence_scores.unsqueeze(1)  # [N] -> [N, 1]
+
         # Concatenate node features with confidence scores
         x = torch.cat([node_features, confidence_scores], dim=1)
 
@@ -439,31 +450,31 @@ class CoCoVinTrainer(BaseTrainer):
     def __init__(self, g, model, info_dict, *args, **kwargs):
         super().__init__(g, model, info_dict, *args, **kwargs)
 
-        # Keep original model as reference template
-        self.model_template = model
-
-        # Create two specialized GCNs with same architecture
-        self.model_cocos = type(model)(
-            self.info_dict
-        ).to(self.info_dict['device'])
-
-        self.model_violin = type(model)(
-            self.info_dict
-        ).to(self.info_dict['device'])
-
         # Attributes from ViolinTrainer
         self.pred_labels = None
         self.pred_conf = None
         self.conf_thrs = 0
         self.virt_edge_index = None
         self.best_pretr_val_acc = None
-        self.pretr_model_dir = os.path.join('exp', self.info_dict['backbone'] + '_ori', self.info_dict['dataset'], '{model}_{db}_{seed}_{state}.pt'.format(model=self.info_dict['backbone'], db=self.info_dict['dataset'], seed=self.info_dict['seed'], state='val',))
+        self.pretr_model_dir = os.path.join('exp', self.info_dict['backbone'] + '_ori', self.info_dict['dataset'],
+                                            '{model}_{db}_{seed}_{state}.pt'.format(model=self.info_dict['backbone'],
+                                                                                    db=self.info_dict['dataset'],
+                                                                                    seed=self.info_dict['seed'],
+                                                                                    state='val', ))
         self.load_pretr_model()
         self.pred_label_flag = True
+
+        self.violin_opt = torch.optim.Adam(self.model.parameters(),
+                                           lr=info_dict['lr'],
+                                           weight_decay=info_dict['weight_decay'])
 
         # Attributes from CoCoSTrainer
         self.Dis = kwargs['Dis']
         self.bce_fn = nn.BCEWithLogitsLoss()
+        self.cocos_opt = torch.optim.Adam([{'params': self.model.parameters()},
+                                           {'params': self.Dis.parameters()}],
+                                          lr=info_dict['lr_cocos'],
+                                          weight_decay=info_dict['weight_decay'])
 
         # Add phase tracking for sequential training
         self.phase1_epochs = self.info_dict['n_epochs'] // 2  # First 1/2 for CoCoS only
@@ -484,36 +495,24 @@ class CoCoVinTrainer(BaseTrainer):
         self.ema_alpha = 0.1  # EMA smoothing factor (adjust as needed)
 
         # Initialize the gating network
-        self.gating_network = GatingMLP(self.info_dict['in_dim'], self.info_dict['out_dim'], self.info_dict['hid_dim']).to(self.info_dict['device'])
+        input_dim = self.g.x.size(1)  # Node feature dimension
+        self.gating_network = GatingMLP(input_dim).to(self.info_dict['device'])
 
-        # Update optimizers for two models
-        self.cocos_opt = torch.optim.Adam([
-            {'params': self.model_cocos.parameters()},
-            {'params': self.Dis.parameters()}
-        ], lr=info_dict['lr_cocos'], weight_decay=info_dict['weight_decay'])
-
-        self.violin_opt = torch.optim.Adam([
-            {'params': self.model_violin.parameters()}
-        ], lr=info_dict['lr'], weight_decay=info_dict['weight_decay'])
-
-        # Combined optimizer
+        # Add gating parameters to the optimizer
         self.unified_opt = torch.optim.Adam([
-            {'params': self.model_cocos.parameters()},
-            {'params': self.model_violin.parameters()},
+            {'params': self.model.parameters()},
             {'params': self.Dis.parameters()},
             {'params': self.gating_network.parameters()}
         ], lr=info_dict['lr'], weight_decay=info_dict['weight_decay'])
 
         # Add weight for consistency loss (between gated and original embeddings)
-        self.info_dict['consistency_weight'] = info_dict.get('consistency_weight', 0.1)
+        self.info_dict['consistency_weight'] = info_dict.get('consistency_weight')
+
+        # Add confidence threshold for feature shuffling
+        self.info_dict['feat_shuf_conf'] = info_dict.get('feat_shuf_conf')
 
     def load_pretr_model(self):
-        # Load pretrained weights
-        pretrained_weights = torch.load(self.pretr_model_dir, map_location=self.info_dict['device'])
-
-        # Initialize both models with same pretrained weights
-        self.model_cocos.load_state_dict(pretrained_weights)
-        self.model_violin.load_state_dict(pretrained_weights)
+        self.model.load_state_dict(torch.load(self.pretr_model_dir, map_location=self.info_dict['device']))
 
     def save_metrics_to_excel(self):
         """Save training metrics to an Excel file"""
@@ -595,7 +594,7 @@ class CoCoVinTrainer(BaseTrainer):
             # Train using unified approach (both methods together)
             tr_loss_epoch, tr_acc, tr_microf1, tr_macrof1 = self.train_epoch_unified(i)
             (val_loss_epoch, val_acc_epoch, val_microf1_epoch, val_macrof1_epoch), \
-            (tt_loss_epoch, tt_acc_epoch, tt_microf1_epoch, tt_macrof1_epoch) = self.eval_epoch(i)
+                (tt_loss_epoch, tt_acc_epoch, tt_microf1_epoch, tt_macrof1_epoch) = self.eval_epoch(i)
 
             # Rest of the code remains the same
             self.train_losses.append(tr_loss_epoch)
@@ -615,7 +614,8 @@ class CoCoVinTrainer(BaseTrainer):
                     self.pretr_model_dir = save_model_dir
                     self.pred_label_flag = True
 
-                print(f"epoch {i:03d} | new best validation accuracy {self.best_val_acc:.4f} - test accuracy {self.best_tt_acc:.4f}")
+                print(
+                    f"epoch {i:03d} | new best validation accuracy {self.best_val_acc:.4f} - test accuracy {self.best_tt_acc:.4f}")
 
             if i % 50 == 0:
                 print(
@@ -665,7 +665,7 @@ class CoCoVinTrainer(BaseTrainer):
                 epoch_cls_loss = self.crs_entropy_fn(ori_logits[cls_nids], cls_labels)
             elif self.info_dict['cocos_cls_mode'] == 'both':
                 epoch_cls_loss = 0.5 * (self.crs_entropy_fn(ori_logits[cls_nids], cls_labels) +
-                                      self.crs_entropy_fn(shuf_logits[cls_nids], cls_labels))
+                                        self.crs_entropy_fn(shuf_logits[cls_nids], cls_labels))
             else:
                 epoch_cls_loss = self.crs_entropy_fn(ori_logits[cls_nids], cls_labels)
 
@@ -728,7 +728,9 @@ class CoCoVinTrainer(BaseTrainer):
             # Violin losses
             epoch_con_loss = torch.abs(ori_conf[con_nids] - aug_conf[con_nids]).sum(dim=1).mean()
             num_unq_vls = virt_edge_index.shape[1] // 2
-            epoch_vl_loss = torch.abs(aug_conf[virt_edge_index[0, :num_unq_vls]] - aug_conf[virt_edge_index[1, :num_unq_vls]]).sum(dim=1).mean()
+            epoch_vl_loss = torch.abs(
+                aug_conf[virt_edge_index[0, :num_unq_vls]] - aug_conf[virt_edge_index[1, :num_unq_vls]]).sum(
+                dim=1).mean()
 
             # Classification loss - recompute logits only when needed
             if self.info_dict['cls_mode'] == 'ori':
@@ -741,12 +743,14 @@ class CoCoVinTrainer(BaseTrainer):
                 _, preds = torch.max(aug_logits[cls_nids], dim=1)
             elif self.info_dict['cls_mode'] == 'both':
                 ori_logits_cls = self.model(x_data, ori_edge_index)
-                epoch_cls_loss = 0.5 * (self.crs_entropy_fn(ori_logits_cls[cls_nids], cls_labels) + self.crs_entropy_fn(aug_logits[cls_nids], cls_labels))
+                epoch_cls_loss = 0.5 * (self.crs_entropy_fn(ori_logits_cls[cls_nids], cls_labels) + self.crs_entropy_fn(
+                    aug_logits[cls_nids], cls_labels))
                 _, preds = torch.max((ori_logits_cls + aug_logits)[cls_nids], dim=1)
                 del ori_logits_cls
 
             # Total loss: classification + Violin only
-            epoch_loss = epoch_cls_loss + self.info_dict['alpha'] * epoch_con_loss + self.info_dict['gamma'] * epoch_vl_loss
+            epoch_loss = epoch_cls_loss + self.info_dict['alpha'] * epoch_con_loss + self.info_dict[
+                'gamma'] * epoch_vl_loss
 
             self.violin_opt.zero_grad()
             epoch_loss.backward()
@@ -768,42 +772,50 @@ class CoCoVinTrainer(BaseTrainer):
         cls_labels = self.tr_y.to(self.info_dict['device'])
         con_nids = torch.cat((self.val_nid, self.tt_nid))
 
-        # Set models to training mode
-        self.model_cocos.train()
-        self.model_violin.train()
+        # CoCoS specific variables
+        ctr_labels_pos = torch.ones_like(con_nids, device=self.info_dict['device']).unsqueeze(dim=-1).float()
+        ctr_labels_neg = torch.zeros_like(con_nids, device=self.info_dict['device']).unsqueeze(dim=-1).float()
+
+        # Clear CUDA cache at the beginning
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        self.model.train()
         self.Dis.train()
         self.gating_network.train()
 
         with torch.set_grad_enabled(True):
             x_data = self.g.x.to(self.info_dict['device'])
+
+            # Get original graph edges and augmented graph edges (Violin)
             ori_edge_index = self.ori_edge_index.to(self.info_dict['device'])
             aug_edge_index = self.g.edge_index.to(self.info_dict['device'])
-            virt_edge_index = self.virt_edge_index.to(self.info_dict['device']) if self.virt_edge_index is not None else None
+            virt_edge_index = self.virt_edge_index.to(
+                self.info_dict['device']) if self.virt_edge_index is not None else None
 
-            # Process with specialized models
-            # CoCoS model handles shuffled features
-            shuf_feat = self.shuffle_feat(x_data)
-            shuf_logits = self.model_cocos(shuf_feat, ori_edge_index)
-
-            # Violin model handles virtual edges
-            aug_logits = self.model_violin(x_data, aug_edge_index) if virt_edge_index is not None else self.model_violin(x_data, ori_edge_index)
-
-            # Get original confidences from both models for reference
-            ori_logits_cocos = self.model_cocos(x_data, ori_edge_index)
-            ori_logits_violin = self.model_violin(x_data, ori_edge_index)
-
-            # Average confidences for gating decisions
-            ori_logits = (ori_logits_cocos + ori_logits_violin) / 2
+            # === Process original graph ===
+            ori_logits = self.model(x_data, ori_edge_index)
             ori_conf = torch.softmax(ori_logits, dim=1)
+            ori_conf_scores = torch.max(ori_conf, dim=1)[0]  # Max confidence scores for gating
 
-            # Apply gating to combine outputs
-            gate_values = self.gating_network(x_data, ori_conf)
+            # === Process Violin-augmented graph (with virtual edges) ===
+            aug_logits = self.model(x_data, aug_edge_index) if virt_edge_index is not None else ori_logits
+
+            # === Process CoCoS-augmented graph (feature shuffling) ===
+            shuf_feat = self.shuffle_feat(x_data)
+            shuf_logits = self.model(shuf_feat, ori_edge_index)
+
+            # === Apply node-level gating ===
+            # Get gate values based on node features and confidence scores
+            gate_values = self.gating_network(x_data, ori_conf_scores)
+
+            # Combine Violin and CoCoS views based on gate values
+            # Expand gate_values to match the dimensions of logits
             gate_expanded = gate_values.unsqueeze(1).expand_as(aug_logits)
-
+            # print gate distribution statistics for debugging
             if epoch_i % 50 == 0:
-                print(f"Epoch {epoch_i:03d} | Gate stats - min: {gate_values.min().item():.4f}, max: {gate_values.max().item():.4f}, mean: {gate_values.mean().item():.4f}")
-
-            # Combine outputs from specialized models
+                print(
+                    f"Epoch {epoch_i:03d} | Gate stats - min: {gate_values.min().item():.4f}, max: {gate_values.max().item():.4f}, mean: {gate_values.mean().item():.4f}, std: {gate_values.std().item():.4f}")
             final_logits = gate_expanded * aug_logits + (1 - gate_expanded) * shuf_logits
 
             # === Consistency loss ===
@@ -821,7 +833,7 @@ class CoCoVinTrainer(BaseTrainer):
                 _, preds = torch.max(final_logits[cls_nids], dim=1)
             else:  # 'both' or any other value
                 epoch_cls_loss = 0.5 * (self.crs_entropy_fn(ori_logits[cls_nids], cls_labels) +
-                                       self.crs_entropy_fn(final_logits[cls_nids], cls_labels))
+                                        self.crs_entropy_fn(final_logits[cls_nids], cls_labels))
                 _, preds = torch.max((ori_logits + final_logits)[cls_nids] / 2, dim=1)
 
             # === Total Loss: Combined ===
@@ -931,7 +943,7 @@ class CoCoVinTrainer(BaseTrainer):
                 # add virtual links for the unlabeled nodes
                 other_vl_k_idx = torch.arange(self.g.num_nodes)[k_mask]
                 other_vl_rand_idx = torch.from_numpy(np.random.choice(other_vl_k_idx, other_k_mask.sum().item(),
-                                                                    replace=True))
+                                                                      replace=True))
                 srcs[other_k_mask] = other_vl_rand_idx
 
             # qualified edges
@@ -954,33 +966,35 @@ class CoCoVinTrainer(BaseTrainer):
         self.virt_edge_index = full_virt_edges
 
     def eval_epoch(self, epoch_i):
-        self.model_cocos.eval()
-        self.model_violin.eval()
-        self.gating_network.eval()
+        tic = time.time()
+        self.model.eval()
+        self.gating_network.eval()  # Put gating network in eval mode
         val_labels = self.val_y.to(self.info_dict['device'])
         tt_labels = self.tt_y.to(self.info_dict['device'])
 
         with torch.set_grad_enabled(False):
             x_data = self.g.x.to(self.info_dict['device'])
             ori_edge_index = self.ori_edge_index.to(self.info_dict['device'])
-            aug_edge_index = self.g.edge_index.to(self.info_dict['device']) if hasattr(self.g, 'edge_index') else ori_edge_index
+            aug_edge_index = self.g.edge_index.to(self.info_dict['device']) if hasattr(self.g,
+                                                                                       'edge_index') else ori_edge_index
 
-            # Get outputs from specialized models
-            ori_logits_cocos = self.model_cocos(x_data, ori_edge_index)
-            ori_logits_violin = self.model_violin(x_data, ori_edge_index)
-
-            # Average for reference
-            ori_logits = (ori_logits_cocos + ori_logits_violin) / 2
+            # Get original logits
+            ori_logits = self.model(x_data, ori_edge_index)
             ori_conf = torch.softmax(ori_logits, dim=1)
+            ori_conf_scores = torch.max(ori_conf, dim=1)[0]
 
-            # Specialized processing
+            # Get VO logits (if virtual edges exist)
+            if self.virt_edge_index is not None:
+                aug_logits = self.model(x_data, aug_edge_index)
+            else:
+                aug_logits = ori_logits
+
+            # Get CoCoS logits
             shuf_feat = self.shuffle_feat(x_data)
-            shuf_logits = self.model_cocos(shuf_feat, ori_edge_index)
-
-            aug_logits = self.model_violin(x_data, aug_edge_index) if self.virt_edge_index is not None else ori_logits_violin
+            shuf_logits = self.model(shuf_feat, ori_edge_index)
 
             # Apply gating
-            gate_values = self.gating_network(x_data, ori_conf)
+            gate_values = self.gating_network(x_data, ori_conf_scores)
             gate_expanded = gate_values.unsqueeze(1).expand_as(aug_logits)
             final_logits = gate_expanded * aug_logits + (1 - gate_expanded) * shuf_logits
 
@@ -1004,18 +1018,14 @@ class CoCoVinTrainer(BaseTrainer):
         toc = time.time()
 
         return (val_epoch_loss.cpu().item(), val_epoch_acc, val_epoch_micro_f1, val_epoch_macro_f1), \
-                (tt_epoch_loss.cpu().item(), tt_epoch_acc, tt_epoch_micro_f1, tt_epoch_macro_f1)
+            (tt_epoch_loss.cpu().item(), tt_epoch_acc, tt_epoch_micro_f1, tt_epoch_macro_f1)
 
     def get_pred_labels(self):
-        # Save current states
-        cur_cocos_state_dict = deepcopy(self.model_cocos.state_dict())
-        cur_violin_state_dict = deepcopy(self.model_violin.state_dict())
+        # load the pretrained model and use it to estimate the labels
+        cur_model_state_dict = deepcopy(self.model.state_dict())
         cur_gating_state_dict = deepcopy(self.gating_network.state_dict()) if hasattr(self, 'gating_network') else None
 
-        # Load pretrained weights to both models
-        pretrained_weights = torch.load(self.pretr_model_dir, map_location=self.info_dict['device'])
-        self.model_cocos.load_state_dict(pretrained_weights)
-        self.model_violin.load_state_dict(pretrained_weights)
+        self.model.load_state_dict(torch.load(self.pretr_model_dir, map_location=self.info_dict['device']))
 
         self.model.eval()
         if hasattr(self, 'gating_network'):
@@ -1040,9 +1050,8 @@ class CoCoVinTrainer(BaseTrainer):
             # set the confidence threshold
             self.set_conf_thrs(preds, conf, self.val_nid)
 
-        # Restore original states
-        self.model_cocos.load_state_dict(cur_cocos_state_dict)
-        self.model_violin.load_state_dict(cur_violin_state_dict)
+        # reload the current model's parameters
+        self.model.load_state_dict(cur_model_state_dict)
         if hasattr(self, 'gating_network') and cur_gating_state_dict is not None:
             self.gating_network.load_state_dict(cur_gating_state_dict)
         self.pred_label_flag = False
@@ -1106,19 +1115,38 @@ class CoCoVinTrainer(BaseTrainer):
         if labels == None:
             raise ValueError('The class of unlabeled nodes have not been estimated!')
 
-        # generate positive features
-        shuf_nid = torch.zeros_like(nid).to(self.info_dict['device'])
+        # Define masks for training nodes and high confidence nodes
+        tr_mask = self.g.train_mask.bool().to(self.info_dict['device'])
+        high_conf_mask = self.pred_conf >= self.info_dict['feat_shuf_conf']  # High confidence threshold
+        shuffle_eligible_mask = tr_mask | high_conf_mask  # Nodes eligible for shuffling
+
+        # Set up to track which nodes have been shuffled
+        shuffled_mask = torch.zeros_like(nid, dtype=torch.bool, device=self.info_dict['device'])
+        shuf_nid = torch.arange(self.g.num_nodes, device=self.info_dict['device'])
+
         for i in range(self.info_dict['out_dim']):
-            # position index of the i-th class
-            i_pos = torch.where(labels == i)[0]
-            # node ids with label class i
-            i_nid = nid[i_pos]
-            # shuffle the i-th class node ids
-            i_shuffle_ind = torch.randperm(len(i_pos)).to(self.info_dict['device'])
-            i_nid_shuffled = i_nid[i_shuffle_ind]
-            # get new id arrangement for the i-th class
-            shuf_nid[i_pos] = i_nid_shuffled.to(self.info_dict['device'])
-        pos_feat[nid] = nfeat[shuf_nid].detach()
+            # Get nodes of class i that are eligible for shuffling
+            i_class_mask = labels == i
+            i_eligible_mask = i_class_mask & shuffle_eligible_mask
+            i_eligible_pos = torch.where(i_eligible_mask)[0]
+
+            if len(i_eligible_pos) > 1:  # Only shuffle if we have multiple eligible nodes
+                # Get node IDs of eligible nodes in class i
+                i_eligible_nid = nid[i_eligible_pos]
+
+                # Shuffle these eligible nodes among themselves
+                i_shuffle_ind = torch.randperm(len(i_eligible_pos)).to(self.info_dict['device'])
+                i_eligible_nid_shuffled = i_eligible_nid[i_shuffle_ind]
+
+                # Update the shuffling mapping
+                shuf_nid[i_eligible_pos] = i_eligible_nid_shuffled
+                shuffled_mask[i_eligible_pos] = True
+
+        # Apply feature shuffling only for eligible nodes
+        pos_feat[shuffled_mask] = nfeat[shuf_nid[shuffled_mask]].detach()
+
+        # For non-eligible nodes, keep their original features
+        # (This is implicit since we're only updating pos_feat for shuffled_mask nodes)
 
         return pos_feat
 
@@ -1162,28 +1190,32 @@ class CoCoVinTrainer(BaseTrainer):
         return shuf_nid
 
     def save_model(self, model, info_dict, Dis=None, gating=None):
+        # Save main model
         save_model_dir = os.path.join('exp', info_dict['model'], info_dict['dataset'])
         if not os.path.exists(save_model_dir):
             os.makedirs(save_model_dir)
+        save_model_path = os.path.join(save_model_dir, '{model}_{db}_{seed}_{state}.pt'.format(model=info_dict['model'],
+                                                                                               db=info_dict['dataset'],
+                                                                                               seed=info_dict['seed'],
+                                                                                               state='val'))
+        torch.save(model.state_dict(), save_model_path)
 
-        # Save specialized models
-        save_cocos_path = os.path.join(save_model_dir,
-                                      f"{info_dict['model']}_{info_dict['dataset']}_{info_dict['seed']}_cocos_val.pt")
-        save_violin_path = os.path.join(save_model_dir,
-                                       f"{info_dict['model']}_{info_dict['dataset']}_{info_dict['seed']}_violin_val.pt")
-
-        torch.save(self.model_cocos.state_dict(), save_cocos_path)
-        torch.save(self.model_violin.state_dict(), save_violin_path)
-
-        # Save additional components
+        # Save discriminator if provided
         if Dis is not None and hasattr(self, 'Dis'):
             save_dis_path = os.path.join(save_model_dir,
-                                        f"{info_dict['model']}_{info_dict['dataset']}_{info_dict['seed']}_dis_val.pt")
+                                         '{model}_{db}_{seed}_{state}_dis.pt'.format(model=info_dict['model'],
+                                                                                     db=info_dict['dataset'],
+                                                                                     seed=info_dict['seed'],
+                                                                                     state='val'))
             torch.save(self.Dis.state_dict(), save_dis_path)
 
-        if gating is not None:
+        # Save gating network if provided
+        if gating is not None and hasattr(self, 'gating_network'):
             save_gate_path = os.path.join(save_model_dir,
-                                         f"{info_dict['model']}_{info_dict['dataset']}_{info_dict['seed']}_gate_val.pt")
+                                          '{model}_{db}_{seed}_{state}_gate.pt'.format(model=info_dict['model'],
+                                                                                       db=info_dict['dataset'],
+                                                                                       seed=info_dict['seed'],
+                                                                                       state='val'))
             torch.save(self.gating_network.state_dict(), save_gate_path)
 
-        return save_cocos_path  # Return one path as reference
+        return save_model_path

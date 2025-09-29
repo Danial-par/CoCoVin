@@ -230,7 +230,11 @@ if __name__ == '__main__':
     parser.add_argument("--seed", type=int, default=0,
                         help="the random seed to reproduce the result")
 
-    parser.add_argument("--consistency_weight", type=float, default=0.1,)
+    parser.add_argument("--consistency_weight", type=float, default=0.9,
+                        help="weight for consistency loss between original and gated embeddings")
+
+    parser.add_argument("--feat_shuf_conf", type=float, default=0.7,
+                        help="confidence threshold for feature shuffling")
 
     args = parser.parse_args()
 
