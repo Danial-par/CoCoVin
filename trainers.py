@@ -417,12 +417,13 @@ class ViolinTrainer(BaseTrainer):
 
 
 class GatingMLP(nn.Module):
-    def __init__(self, input_dim, hidden_dim=64):
+    def __init__(self, input_dim, hidden_dim=64, output_dim=1):  # output_dim = number of classes
         super(GatingMLP, self).__init__()
 
         # MLP layers to combine node features and confidence scores
         self.fc1 = nn.Linear(input_dim + 1, hidden_dim)  # +1 for the confidence score
-        self.fc2 = nn.Linear(hidden_dim, 1)
+        self.fc2 = nn.Linear(hidden_dim, output_dim)  # Now outputs C values per node
+
         # Dropout layer for regularization
         self.dropout = nn.Dropout(p=0.5)
 
@@ -441,9 +442,9 @@ class GatingMLP(nn.Module):
         # Pass through MLP
         x = self.relu(self.fc1(x))
         x = self.dropout(x)
-        x = self.sigmoid(self.fc2(x))
+        x = self.sigmoid(self.fc2(x))  # Output shape: [N, output_dim]
 
-        return x.squeeze(1)  # Return [N] tensor of gating values between 0-1
+        return x  # Return [N, C] tensor of class-specific gating values
 
 
 class CoCoVinTrainer(BaseTrainer):
@@ -494,9 +495,14 @@ class CoCoVinTrainer(BaseTrainer):
         self.avg_probs = None  # For EMA-based tracking of probabilities
         self.ema_alpha = 0.1  # EMA smoothing factor (adjust as needed)
 
-        # Initialize the gating network
+        # Initialize the gating network with class-specific gates
         input_dim = self.g.x.size(1)  # Node feature dimension
-        self.gating_network = GatingMLP(input_dim).to(self.info_dict['device'])
+        num_classes = self.info_dict['out_dim']  # Number of classes
+        self.gating_network = GatingMLP(
+            input_dim,
+            hidden_dim=64,
+            output_dim=num_classes
+        ).to(self.info_dict['device'])
 
         # Add gating parameters to the optimizer
         self.unified_opt = torch.optim.Adam([
@@ -807,16 +813,23 @@ class CoCoVinTrainer(BaseTrainer):
 
             # === Apply node-level gating ===
             # Get gate values based on node features and confidence scores
+            # Now returns [N, C] tensor with class-specific gates
             gate_values = self.gating_network(x_data, ori_conf_scores)
 
-            # Combine Violin and CoCoS views based on gate values
-            # Expand gate_values to match the dimensions of logits
-            gate_expanded = gate_values.unsqueeze(1).expand_as(aug_logits)
-            # print gate distribution statistics for debugging
+            # Apply element-wise product for class-specific gating
+            # No need to expand dimensions - shapes align naturally for element-wise operations
+            final_logits = gate_values * aug_logits + (1 - gate_values) * shuf_logits
+
+            # Print more detailed gating statistics
             if epoch_i % 50 == 0:
-                print(
-                    f"Epoch {epoch_i:03d} | Gate stats - min: {gate_values.min().item():.4f}, max: {gate_values.max().item():.4f}, mean: {gate_values.mean().item():.4f}, std: {gate_values.std().item():.4f}")
-            final_logits = gate_expanded * aug_logits + (1 - gate_expanded) * shuf_logits
+                print(f"Epoch {epoch_i:03d} | Gate stats - min: {gate_values.min().item():.4f}, "
+                      f"max: {gate_values.max().item():.4f}, mean: {gate_values.mean().item():.4f}")
+                # Add class-specific statistics
+                for c in range(min(7, gate_values.size(1))):  # Print first 7 classes to avoid clutter
+                    print(f"  Class {c} - mean: {gate_values[:, c].mean().item():.4f}, "
+                          f"std: {gate_values[:, c].std().item():.4f}")
+                if gate_values.size(1) > 7:
+                    print(f"  ... {gate_values.size(1) - 7} more classes ...")
 
             # === Consistency loss ===
             # L1 norm between final embeddings and original embeddings
@@ -993,10 +1006,10 @@ class CoCoVinTrainer(BaseTrainer):
             shuf_feat = self.shuffle_feat(x_data)
             shuf_logits = self.model(shuf_feat, ori_edge_index)
 
-            # Apply gating
+            # Apply class-specific gating
             gate_values = self.gating_network(x_data, ori_conf_scores)
-            gate_expanded = gate_values.unsqueeze(1).expand_as(aug_logits)
-            final_logits = gate_expanded * aug_logits + (1 - gate_expanded) * shuf_logits
+            # Direct element-wise product between tensors of shape [N, C]
+            final_logits = gate_values * aug_logits + (1 - gate_values) * shuf_logits
 
             # Evaluate using final gated logits
             final_conf = torch.softmax(final_logits, dim=1)
@@ -1188,6 +1201,40 @@ class CoCoVinTrainer(BaseTrainer):
             shuf_nid[i_pos] = i_neg
 
         return shuf_nid
+
+    def analyze_class_gating(self):
+        """Analyze how class-specific gating behaves across different classes"""
+        self.model.eval()
+        self.gating_network.eval()
+
+        with torch.no_grad():
+            x_data = self.g.x.to(self.info_dict['device'])
+            ori_edge_index = self.ori_edge_index.to(self.info_dict['device'])
+
+            # Get confidence scores
+            logits = self.model(x_data, ori_edge_index)
+            ori_conf = torch.softmax(logits, dim=1)
+            ori_conf_scores = torch.max(ori_conf, dim=1)[0]
+
+            # Get class-specific gate values
+            gate_values = self.gating_network(x_data, ori_conf_scores)
+
+            # Get predicted labels
+            _, preds = torch.max(logits, dim=1)
+
+            # Analyze gating values per predicted class
+            results = {}
+            for c in range(self.info_dict['out_dim']):
+                class_mask = (preds == c)
+                if class_mask.sum() > 0:
+                    # Average gate values for nodes predicted as class c
+                    avg_gates = gate_values[class_mask].mean(dim=0)
+                    results[f"class_{c}"] = {
+                        "count": class_mask.sum().item(),
+                        "avg_gates": avg_gates.cpu().numpy()
+                    }
+
+            return results
 
     def save_model(self, model, info_dict, Dis=None, gating=None):
         # Save main model
