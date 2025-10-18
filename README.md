@@ -1,4 +1,4 @@
 # CoCoVin
 Experiments to combine CoCoS and Violin. 
 
-Read the ideas and progress here: https://www.notion.so/Learnable-Augmentations-26abf57942a880a2add3da9a94ab7cc8?source=copy_link
+Read the ideas and progress here: https://www.notion.so/242bf57942a880888248f42b69570a85?v=242bf57942a880ea9f7b000cc9d8defa&source=copy_link
