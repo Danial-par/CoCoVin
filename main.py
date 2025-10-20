@@ -13,6 +13,7 @@ import numpy as np
 import time
 import pandas as pd
 
+
 def save_results(history, filename):
     """
     Saves the training, validation, and test accuracy and loss over epochs to a CSV file.
@@ -21,6 +22,7 @@ def save_results(history, filename):
     df.index.name = 'epoch'
     df.to_csv(filename)
     print(f"Results saved to {filename}")
+
 
 def ogb_prep(db, db_dir):
     dataset = PygNodePropPredDataset(name=db, root=db_dir)
@@ -50,6 +52,7 @@ def ogb_prep(db, db_dir):
     graph.y = label.squeeze()
 
     return graph, dataset.num_classes
+
 
 def create_standard_split(data, num_per_class):
     # Get the number of nodes and classes
@@ -91,40 +94,43 @@ def create_standard_split(data, num_per_class):
 
     return data
 
-def load_data(db, db_dir='./dataset'):
-        if db in ['Cora', 'CiteSeer', 'PubMed']:
-            data = Planetoid(db_dir, db, transform=transforms.NormalizeFeatures())
-            g = data[0]
-            out_dim = data.num_classes
-        elif db in ['photo', 'computers']:
-            data = Amazon(db_dir, db, transform=transforms.NormalizeFeatures())
-            g = data[0]
-            out_dim = data.num_classes
-            # Create standard split with 20 labels per class
-            g = create_standard_split(g, 20)
-        elif db in ['cs', 'physics']:
-            data = Coauthor(db_dir, db, transform=transforms.NormalizeFeatures())
-            g = data[0]
-            out_dim = data.num_classes
-            # Create standard split with 20 labels per class
-            g = create_standard_split(g, 20)
-        elif db == 'ogbn-arxiv':
-            g, out_dim = ogb_prep('ogbn-arxiv', db_dir)
-        elif db == 'ogbn-products':
-            g, out_dim = ogb_prep('ogbn-products', db_dir)
-        else:
-            raise ValueError('Unknown dataset: {}'.format(db))
 
-        info_dict = {
-            'in_dim': g.x.shape[1],
-            'out_dim': out_dim
-        }
-        return g, info_dict
+def load_data(db, db_dir='./dataset'):
+    if db in ['Cora', 'CiteSeer', 'PubMed']:
+        data = Planetoid(db_dir, db, transform=transforms.NormalizeFeatures())
+        g = data[0]
+        out_dim = data.num_classes
+    elif db in ['photo', 'computers']:
+        data = Amazon(db_dir, db, transform=transforms.NormalizeFeatures())
+        g = data[0]
+        out_dim = data.num_classes
+        # Create standard split with 20 labels per class
+        g = create_standard_split(g, 20)
+    elif db in ['cs', 'physics']:
+        data = Coauthor(db_dir, db, transform=transforms.NormalizeFeatures())
+        g = data[0]
+        out_dim = data.num_classes
+        # Create standard split with 20 labels per class
+        g = create_standard_split(g, 20)
+    elif db == 'ogbn-arxiv':
+        g, out_dim = ogb_prep('ogbn-arxiv', db_dir)
+    elif db == 'ogbn-products':
+        g, out_dim = ogb_prep('ogbn-products', db_dir)
+    else:
+        raise ValueError('Unknown dataset: {}'.format(db))
+
+    info_dict = {
+        'in_dim': g.x.shape[1],
+        'out_dim': out_dim
+    }
+    return g, info_dict
+
 
 def set_seed(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
     return
+
 
 def main(args):
     acc_list = []
@@ -138,7 +144,8 @@ def main(args):
         g, info_dict = load_data(args.dataset)
         set_seed(args.seed)
         info_dict.update(args.__dict__)
-        info_dict.update({'device': torch.device('cpu') if args.gpu == -1 else torch.device('cuda:{}'.format(args.gpu)),})
+        info_dict.update(
+            {'device': torch.device('cpu') if args.gpu == -1 else torch.device('cuda:{}'.format(args.gpu)), })
 
         args.seed = args.seed + 1
 
@@ -175,8 +182,10 @@ def main(args):
         print('The time cost of the {} round ({} epochs) is: {}.'.format(i, info_dict['n_epochs'], time_cost))
 
     print('\n\n')
-    print('The averaged accuracy of {} rounds of experiments on {} is: {}'.format(args.round, args.dataset, np.mean(acc_list)))
-    print('The averaged time cost (seconds/ 100 epochs) of {} rounds is {:.4f}'.format(args.round, np.mean(time_cost_list) / args.n_epochs * 100))
+    print('The averaged accuracy of {} rounds of experiments on {} is: {}'.format(args.round, args.dataset,
+                                                                                  np.mean(acc_list)))
+    print('The averaged time cost (seconds/ 100 epochs) of {} rounds is {:.4f}'.format(args.round, np.mean(
+        time_cost_list) / args.n_epochs * 100))
 
 
 if __name__ == '__main__':
@@ -235,6 +244,15 @@ if __name__ == '__main__':
 
     parser.add_argument("--feat_shuf_conf", type=float, default=0.7,
                         help="confidence threshold for feature shuffling")
+
+    parser.add_argument("--temperature", type=float, default=3.0,
+                        help="temperature parameter for softmax in KL divergence")
+
+    parser.add_argument("--lambda_kl", type=float, default=1.0,
+                        help="weight for KL divergence between original and final embeddings")
+
+    parser.add_argument("--lambda_co", type=float, default=0.5,
+                        help="weight for cross-view KL divergence between VO and shuffled views")
 
     args = parser.parse_args()
 

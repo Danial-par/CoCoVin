@@ -417,13 +417,12 @@ class ViolinTrainer(BaseTrainer):
 
 
 class GatingMLP(nn.Module):
-    def __init__(self, input_dim, hidden_dim=64, output_dim=1):  # output_dim = number of classes
+    def __init__(self, input_dim, hidden_dim=64):
         super(GatingMLP, self).__init__()
 
         # MLP layers to combine node features and confidence scores
         self.fc1 = nn.Linear(input_dim + 1, hidden_dim)  # +1 for the confidence score
-        self.fc2 = nn.Linear(hidden_dim, output_dim)  # Now outputs C values per node
-
+        self.fc2 = nn.Linear(hidden_dim, 1)
         # Dropout layer for regularization
         self.dropout = nn.Dropout(p=0.5)
 
@@ -442,9 +441,9 @@ class GatingMLP(nn.Module):
         # Pass through MLP
         x = self.relu(self.fc1(x))
         x = self.dropout(x)
-        x = self.sigmoid(self.fc2(x))  # Output shape: [N, output_dim]
+        x = self.sigmoid(self.fc2(x))
 
-        return x  # Return [N, C] tensor of class-specific gating values
+        return x.squeeze(1)  # Return [N] tensor of gating values between 0-1
 
 
 class CoCoVinTrainer(BaseTrainer):
@@ -495,14 +494,9 @@ class CoCoVinTrainer(BaseTrainer):
         self.avg_probs = None  # For EMA-based tracking of probabilities
         self.ema_alpha = 0.1  # EMA smoothing factor (adjust as needed)
 
-        # Initialize the gating network with class-specific gates
+        # Initialize the gating network
         input_dim = self.g.x.size(1)  # Node feature dimension
-        num_classes = self.info_dict['out_dim']  # Number of classes
-        self.gating_network = GatingMLP(
-            input_dim,
-            hidden_dim=64,
-            output_dim=num_classes
-        ).to(self.info_dict['device'])
+        self.gating_network = GatingMLP(input_dim).to(self.info_dict['device'])
 
         # Add gating parameters to the optimizer
         self.unified_opt = torch.optim.Adam([
@@ -516,6 +510,13 @@ class CoCoVinTrainer(BaseTrainer):
 
         # Add confidence threshold for feature shuffling
         self.info_dict['feat_shuf_conf'] = info_dict.get('feat_shuf_conf')
+
+        # Add temperature parameter for softmax
+        self.temperature = info_dict.get('temperature', 4.0)
+
+        # Add weight parameters for KL components
+        self.info_dict['lambda_kl'] = info_dict.get('lambda_kl', 1.0)
+        self.info_dict['lambda_co'] = info_dict.get('lambda_co', 0.0)
 
     def load_pretr_model(self):
         self.model.load_state_dict(torch.load(self.pretr_model_dir, map_location=self.info_dict['device']))
@@ -776,7 +777,7 @@ class CoCoVinTrainer(BaseTrainer):
         # Setup common variables
         cls_nids = self.tr_nid
         cls_labels = self.tr_y.to(self.info_dict['device'])
-        con_nids = torch.cat((self.val_nid, self.tt_nid))
+        con_nids = torch.cat((self.val_nid, self.tt_nid))  # These are unlabeled nodes
 
         # CoCoS specific variables
         ctr_labels_pos = torch.ones_like(con_nids, device=self.info_dict['device']).unsqueeze(dim=-1).float()
@@ -813,27 +814,31 @@ class CoCoVinTrainer(BaseTrainer):
 
             # === Apply node-level gating ===
             # Get gate values based on node features and confidence scores
-            # Now returns [N, C] tensor with class-specific gates
             gate_values = self.gating_network(x_data, ori_conf_scores)
 
-            # Apply element-wise product for class-specific gating
-            # No need to expand dimensions - shapes align naturally for element-wise operations
-            final_logits = gate_values * aug_logits + (1 - gate_values) * shuf_logits
+            # Combine Violin and CoCoS views based on gate values
+            # Expand gate_values to match the dimensions of logits
+            gate_expanded = gate_values.unsqueeze(1).expand_as(aug_logits)
 
-            # Print more detailed gating statistics
+            # Print gate distribution statistics for debugging
             if epoch_i % 50 == 0:
-                print(f"Epoch {epoch_i:03d} | Gate stats - min: {gate_values.min().item():.4f}, "
-                      f"max: {gate_values.max().item():.4f}, mean: {gate_values.mean().item():.4f}")
-                # Add class-specific statistics
-                for c in range(min(7, gate_values.size(1))):  # Print first 7 classes to avoid clutter
-                    print(f"  Class {c} - mean: {gate_values[:, c].mean().item():.4f}, "
-                          f"std: {gate_values[:, c].std().item():.4f}")
-                if gate_values.size(1) > 7:
-                    print(f"  ... {gate_values.size(1) - 7} more classes ...")
+                print(
+                    f"Epoch {epoch_i:03d} | Gate stats - min: {gate_values.min().item():.4f}, max: {gate_values.max().item():.4f}, mean: {gate_values.mean().item():.4f}, std: {gate_values.std().item():.4f}")
 
-            # === Consistency loss ===
-            # L1 norm between final embeddings and original embeddings
-            consistency_loss = torch.abs(final_logits - ori_logits).mean()
+            final_logits = gate_expanded * aug_logits + (1 - gate_expanded) * shuf_logits
+
+            # === Tri-view KL consistency loss ===
+            # First component: KL between original and final views
+            kl_orig_final = self.compute_bidirectional_kl(ori_logits[con_nids],
+                                                          final_logits[con_nids])
+
+            # Second component: KL between VO (augmented) and shuffled views
+            kl_aug_shuf = self.compute_bidirectional_kl(aug_logits[con_nids],
+                                                        shuf_logits[con_nids])
+
+            # Combined tri-view KL loss
+            tri_view_kl_loss = (self.info_dict['lambda_kl'] * kl_orig_final.mean() +
+                                self.info_dict['lambda_co'] * kl_aug_shuf.mean())
 
             # === Classification Loss ===
             cls_mode = self.info_dict.get('cls_mode')
@@ -850,12 +855,7 @@ class CoCoVinTrainer(BaseTrainer):
                 _, preds = torch.max((ori_logits + final_logits)[cls_nids] / 2, dim=1)
 
             # === Total Loss: Combined ===
-            # Main components
-            main_loss = epoch_cls_loss
-
-            # Add consistency loss (between gated embeddings and original)
-            cons_weight = self.info_dict['consistency_weight']
-            main_loss = main_loss + cons_weight * consistency_loss
+            main_loss = epoch_cls_loss + tri_view_kl_loss
 
             # Optimization step
             self.unified_opt.zero_grad()
@@ -1006,10 +1006,10 @@ class CoCoVinTrainer(BaseTrainer):
             shuf_feat = self.shuffle_feat(x_data)
             shuf_logits = self.model(shuf_feat, ori_edge_index)
 
-            # Apply class-specific gating
+            # Apply gating
             gate_values = self.gating_network(x_data, ori_conf_scores)
-            # Direct element-wise product between tensors of shape [N, C]
-            final_logits = gate_values * aug_logits + (1 - gate_values) * shuf_logits
+            gate_expanded = gate_values.unsqueeze(1).expand_as(aug_logits)
+            final_logits = gate_expanded * aug_logits + (1 - gate_expanded) * shuf_logits
 
             # Evaluate using final gated logits
             final_conf = torch.softmax(final_logits, dim=1)
@@ -1202,40 +1202,6 @@ class CoCoVinTrainer(BaseTrainer):
 
         return shuf_nid
 
-    def analyze_class_gating(self):
-        """Analyze how class-specific gating behaves across different classes"""
-        self.model.eval()
-        self.gating_network.eval()
-
-        with torch.no_grad():
-            x_data = self.g.x.to(self.info_dict['device'])
-            ori_edge_index = self.ori_edge_index.to(self.info_dict['device'])
-
-            # Get confidence scores
-            logits = self.model(x_data, ori_edge_index)
-            ori_conf = torch.softmax(logits, dim=1)
-            ori_conf_scores = torch.max(ori_conf, dim=1)[0]
-
-            # Get class-specific gate values
-            gate_values = self.gating_network(x_data, ori_conf_scores)
-
-            # Get predicted labels
-            _, preds = torch.max(logits, dim=1)
-
-            # Analyze gating values per predicted class
-            results = {}
-            for c in range(self.info_dict['out_dim']):
-                class_mask = (preds == c)
-                if class_mask.sum() > 0:
-                    # Average gate values for nodes predicted as class c
-                    avg_gates = gate_values[class_mask].mean(dim=0)
-                    results[f"class_{c}"] = {
-                        "count": class_mask.sum().item(),
-                        "avg_gates": avg_gates.cpu().numpy()
-                    }
-
-            return results
-
     def save_model(self, model, info_dict, Dis=None, gating=None):
         # Save main model
         save_model_dir = os.path.join('exp', info_dict['model'], info_dict['dataset'])
@@ -1266,3 +1232,40 @@ class CoCoVinTrainer(BaseTrainer):
             torch.save(self.gating_network.state_dict(), save_gate_path)
 
         return save_model_path
+
+    def compute_bidirectional_kl(self, logits_a, logits_b, temperature=None):
+        """
+        Compute bidirectional KL divergence between two distributions derived from logits
+        with temperature scaling.
+
+        Args:
+            logits_a: First set of logits
+            logits_b: Second set of logits
+            temperature: Temperature for softmax (higher = softer probabilities)
+
+        Returns:
+            Bidirectional KL divergence: KL(p_a||p_b) + KL(p_b||p_a)
+        """
+        if temperature is None:
+            temperature = self.temperature
+
+        # Apply temperature scaling and convert to probabilities
+        p_a = F.softmax(logits_a / temperature, dim=1)
+        p_b = F.softmax(logits_b / temperature, dim=1)
+
+        # Compute KL(p_a||p_b)
+        kl_a_b = F.kl_div(
+            F.log_softmax(logits_b / temperature, dim=1),
+            p_a,
+            reduction='none'
+        ).sum(dim=1)
+
+        # Compute KL(p_b||p_a)
+        kl_b_a = F.kl_div(
+            F.log_softmax(logits_a / temperature, dim=1),
+            p_b,
+            reduction='none'
+        ).sum(dim=1)
+
+        # Return bidirectional KL
+        return kl_a_b + kl_b_a
